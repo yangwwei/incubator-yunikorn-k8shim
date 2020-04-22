@@ -42,16 +42,16 @@ import (
 // what are supported.
 var defaultSchedulerPolicy = schedulerapi.Policy{
 	Predicates: []schedulerapi.PredicatePolicy{
-		{Name: predicates.NoVolumeZoneConflictPred},
-		{Name: predicates.MaxCSIVolumeCountPred},
-		{Name: predicates.MatchInterPodAffinityPred},
-		{Name: predicates.NoDiskConflictPred},
-		{Name: predicates.GeneralPred},
-		{Name: predicates.PodToleratesNodeTaintsPred},
-		{Name: predicates.CheckNodeUnschedulablePred},
+		//{Name: predicates.NoVolumeZoneConflictPred},
+		//{Name: predicates.MaxCSIVolumeCountPred},
+		//{Name: predicates.MatchInterPodAffinityPred},
+		//{Name: predicates.NoDiskConflictPred},
+		//{Name: predicates.GeneralPred},
+		//{Name: predicates.PodToleratesNodeTaintsPred},
+		//{Name: predicates.CheckNodeUnschedulablePred},
 		// If replacing the default scheduler you must have the volume predicate included:
 		// https://docs.okd.io/latest/admin_guide/scheduling/scheduler.html#static-predicates
-		{Name: predicates.CheckVolumeBindingPred},
+		//{Name: predicates.CheckVolumeBindingPred},
 	},
 }
 

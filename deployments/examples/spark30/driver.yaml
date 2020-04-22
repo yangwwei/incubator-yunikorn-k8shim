@@ -1,14 +1,13 @@
 apiVersion: v1
 kind: Pod
 metadata:
+  name: spark-driver
   labels:
-    spark-app-id: spark-00001
     queue: root.sandbox
   annotations:
-    spark-driver-cpus: 1
+    spark-driver-cpus: 100
     spark-driver-mem: 1g
-    spark-executor-cpu: 1
+    spark-executor-cpu: 100
     spark-executor-mem: 1g
-    spark-executor-count: 2
 spec:
   schedulerName: yunikorn

@@ -84,9 +84,9 @@ common-check-license:
 run: build
 	@echo "running scheduler locally"
 	@cp ${LOCAL_CONF}/${CONF_FILE} ${RELEASE_BIN_DIR}
-	cd ${RELEASE_BIN_DIR} && ./${BINARY} -kubeConfig=$(KUBECONFIG) -interval=1s \
+	cd ${RELEASE_BIN_DIR} && ./${BINARY} -kubeConfig=$(KUBECONFIG) -interval=0 \
 	-clusterId=mycluster -clusterVersion=${VERSION} -name=yunikorn -policyGroup=queues \
-	-logEncoding=console -logLevel=-1
+	-logEncoding=console -logLevel=0
 
 # Create output directories
 .PHONY: init

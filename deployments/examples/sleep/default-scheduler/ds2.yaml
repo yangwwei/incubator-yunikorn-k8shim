@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: batch-sleep-job
+spec:
+  completions: 20
+  parallelism: 20
+  template:
+    metadata:
+      labels:
+        app: sleep
+    spec:
+      schedulerName: yunikorn
+      tolerations:
+        - key: node-role.kubernetes.io/liftie-infra
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+        - key: CriticalAddonsOnly
+          operator: Exists
+      restartPolicy: Never
+      containers:
+        - name: sleep300
+          image: "alpine:latest"
+          imagePullPolicy: IfNotPresent
+          command: ["sleep", "300"]
+          resources:
+            requests:
+              cpu: "100m"

@@ -101,6 +101,7 @@ func NewApplication(appID, queueName, user string, tags map[string]string, sched
 		},
 		fsm.Callbacks{
 			string(events.SubmitApplication):   app.handleSubmitApplicationEvent,
+			string(events.RunApplication):      app.handleRunApplicationEvent,
 			string(events.RecoverApplication):  app.handleRecoverApplicationEvent,
 			string(events.RejectApplication):   app.handleRejectApplicationEvent,
 			string(events.CompleteApplication): app.handleCompleteApplicationEvent,
@@ -253,13 +254,7 @@ func (app *Application) Schedule() {
 			log.Logger.Warn("failed to handle SUBMIT app event",
 				zap.Error(err))
 		}
-	case states.Accepted:
-		ev := NewRunApplicationEvent(app.GetApplicationID())
-		if err := app.handle(ev); err != nil {
-			log.Logger.Warn("failed to handle RUN app event",
-				zap.Error(err))
-		}
-	case states.Running:
+	case states.Accepted, states.Running:
 		if len(app.GetNewTasks()) > 0 {
 			for _, task := range app.GetNewTasks() {
 				// for each new task, we do a sanity check before moving the state to Pending_Schedule
@@ -316,6 +311,27 @@ func (app *Application) handleSubmitApplicationEvent(event *fsm.Event) {
 	}
 }
 
+func (app *Application) handleRunApplicationEvent(event *fsm.Event) {
+	err := app.schedulerAPI.Update(
+		&si.UpdateRequest{
+			UpdateApplications: []*si.UpdateApplicationRequest{
+				{
+					ApplicationID: app.applicationID,
+					PartitionName: app.partition,
+					State: &si.ClaimApplicationState{
+						ApplicationState:     si.ApplicationStates_RUNNING,
+						Message:              "",
+					},
+				},
+			},
+			RmID: conf.GetSchedulerConf().ClusterID,
+		})
+
+	if err != nil {
+		log.Logger.Warn("failed to update app", zap.Error(err))
+	}
+}
+
 func (app *Application) handleRecoverApplicationEvent(event *fsm.Event) {
 	log.Logger.Info("handle app recovering",
 		zap.String("app", app.String()),
@@ -351,6 +367,16 @@ func (app *Application) handleRejectApplicationEvent(event *fsm.Event) {
 
 func (app *Application) handleCompleteApplicationEvent(event *fsm.Event) {
 	// TODO app lifecycle updates
+}
+
+func (app *Application) isSparkJob() bool {
+	app.lock.RLock()
+	defer app.lock.RUnlock()
+	if sparkRole, exist := app.tags["spark-role"]; exist {
+		return sparkRole == "driver" || sparkRole == "executor"
+	}
+
+	return false
 }
 
 func (app *Application) enterState(event *fsm.Event) {

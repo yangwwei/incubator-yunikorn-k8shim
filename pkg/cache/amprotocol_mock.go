@@ -104,6 +104,14 @@ func (m *MockedAMProtocol) NotifyApplicationComplete(appID string) {
 	}
 }
 
+func (m *MockedAMProtocol) NotifyApplicationRunning(appID string) {
+	if app := m.GetApplication(appID); app != nil {
+		if p, valid := app.(*Application); valid {
+			p.SetState(events.States().Application.Running)
+		}
+	}
+}
+
 func (m *MockedAMProtocol) NotifyTaskComplete(appID, taskID string) {
 	if app := m.GetApplication(appID); app != nil {
 		if task, err := app.GetTask(taskID); err == nil {

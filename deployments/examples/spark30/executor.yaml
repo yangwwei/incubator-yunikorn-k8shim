@@ -1,8 +1,11 @@
 apiVersion: v1
 kind: Pod
 metadata:
+  name: spark-executor
   labels:
-    spark-app-id: spark-00001
-    queue: root.sandbox
+    queue: root.default
+  annotations:
+    spark-executor-cpu: 100
+    spark-executor-mem: 1g
 spec:
   schedulerName: yunikorn

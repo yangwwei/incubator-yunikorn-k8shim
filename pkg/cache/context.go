@@ -413,6 +413,16 @@ func (ctx *Context) NotifyApplicationComplete(appID string) {
 	}
 }
 
+func (ctx *Context) NotifyApplicationRunning(appID string) {
+	if app := ctx.GetApplication(appID); app != nil {
+		log.Logger.Debug("NotifyApplicationRunning",
+			zap.String("appID", appID),
+			zap.String("currentAppState", app.GetApplicationState()))
+		ev := NewRunApplicationEvent(appID)
+		dispatcher.Dispatch(ev)
+	}
+}
+
 func (ctx *Context) NotifyTaskComplete(appID, taskID string) {
 	log.Logger.Debug("NotifyTaskComplete",
 		zap.String("appID", appID),

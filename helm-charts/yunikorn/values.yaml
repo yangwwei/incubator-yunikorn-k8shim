@@ -7,8 +7,8 @@ serviceAccount: yunikorn-admin
 
 image:
   repository: yunikorn/yunikorn-scheduler-k8s
-  tag: latest
-  pullPolicy: Always
+  tag: 0.8.1
+  pullPolicy: IfNotPresent
 
 web_image:
   repository: yunikorn/yunikorn-web
@@ -28,7 +28,7 @@ service:
 # When this flag is true, the admission controller will be installed along with the scheduler.
 # When this flag is false, the admission controller will not be installed.
 # Once the admission controller is installed, all traffic will be routing to yunikorn.
-embedAdmissionController: false
+embedAdmissionController: true
 
 #
 # ------------------------------------------------------------------------

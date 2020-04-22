@@ -19,6 +19,9 @@
 package general
 
 import (
+	"strings"
+
+	"github.com/apache/incubator-yunikorn-core/pkg/cache"
 	"go.uber.org/zap"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -110,6 +113,11 @@ func (os *Manager) getAppMetadata(pod *v1.Pod) (interfaces.ApplicationMetadata, 
 	} else {
 		tags["namespace"] = pod.Namespace
 	}
+
+	for k,v := range pod.Labels {
+		tags[k] = v
+	}
+
 	// get the application owner (this is all that is available as far as we can find)
 	user := pod.Spec.ServiceAccountName
 
@@ -212,6 +220,18 @@ func (os *Manager) updatePod(old, new interface{}) {
 			if taskMeta, ok := os.getTaskMetadata(newPod); ok {
 				if app := os.amProtocol.GetApplication(taskMeta.ApplicationID); app != nil {
 					os.amProtocol.NotifyTaskComplete(taskMeta.ApplicationID, taskMeta.TaskID)
+				}
+			}
+		}
+
+		log.Logger.Info("=== pod state changes", zap.String("name", newPod.Name), zap.Bool("", strings.Contains(newPod.Name, "-driver")))
+		if utils.IsPodRunning(newPod) && !strings.Contains(newPod.Name, "-driver") {
+			if appMeta, ok := os.getAppMetadata(newPod); ok {
+				if app := os.amProtocol.GetApplication(appMeta.ApplicationID); app != nil {
+					if app.GetApplicationState() != cache.Running.String() {
+						log.Logger.Info("NotifyApplicationRunning", zap.String("appID", appMeta.ApplicationID))
+						os.amProtocol.NotifyApplicationRunning(appMeta.ApplicationID)
+					}
 				}
 			}
 		}

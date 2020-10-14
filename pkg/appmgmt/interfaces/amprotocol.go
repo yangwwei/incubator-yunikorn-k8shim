@@ -19,6 +19,7 @@
 package interfaces
 
 import (
+	"github.com/apache/incubator-yunikorn-scheduler-interface/lib/go/si"
 	v1 "k8s.io/api/core/v1"
 )
 
@@ -72,10 +73,12 @@ type ApplicationMetadata struct {
 	QueueName     string
 	User          string
 	Tags          map[string]string
+	TaskGroups    map[string]si.TaskGroup
 }
 
 type TaskMetadata struct {
 	ApplicationID string
 	TaskID        string
+	TaskGroup     string
 	Pod           *v1.Pod
 }

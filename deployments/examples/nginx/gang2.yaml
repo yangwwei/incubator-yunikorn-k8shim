@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: nginx
+  name: nginx
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      annotations:
+        yunikorn.apache.org/task-group-name: gang-test
+        "yunikorn.apache.org/task-groups": '{"gang-test":{"name":"gang-test","minMember":2,"minResource":{"cpu":"100m","memory":"500Mi"}}}'
+      labels:
+        app: nginx
+        applicationId: "gang-test-02"
+        queue: root.sandbox
+      name: nginx
+    spec:
+      schedulerName: yunikorn
+      containers:
+        - name: nginx
+          image: "nginx:1.11.1-alpine"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "500M"

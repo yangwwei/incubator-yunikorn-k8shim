@@ -98,8 +98,14 @@ func (callback *AsyncRMCallback) RecvUpdateResponse(response *si.UpdateResponse)
 			zap.String("nodeID", alloc.NodeID))
 
 		if app := callback.context.GetApplication(alloc.ApplicationID); app != nil {
-			ev := cache.NewAllocateTaskEvent(app.GetApplicationID(), alloc.AllocationKey, alloc.UUID, alloc.NodeID)
-			dispatcher.Dispatch(ev)
+			if alloc.Victim != nil {
+				log.Logger().Info("victim", zap.Any("victim", alloc.Victim))
+				ev := cache.NewPreemptTaskEvent(app.GetApplicationID(), alloc.AllocationKey, alloc.UUID, alloc.NodeID, alloc.Victim.AllocationKey, alloc.Victim.AllocationUUID)
+				dispatcher.Dispatch(ev)
+			} else {
+				ev := cache.NewAllocateTaskEvent(app.GetApplicationID(), alloc.AllocationKey, alloc.UUID, alloc.NodeID)
+				dispatcher.Dispatch(ev)
+			}
 		}
 	}
 

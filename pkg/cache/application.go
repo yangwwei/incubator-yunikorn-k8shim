@@ -23,9 +23,12 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/client"
 	"github.com/looplab/fsm"
 	"go.uber.org/zap"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	v12 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/apache/incubator-yunikorn-core/pkg/api"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/appmgmt/interfaces"
@@ -43,16 +46,86 @@ type Application struct {
 	partition     string
 	user          string
 	taskMap       map[string]*Task
+	reservationMapping map[string]*Task // actual -> mapping
+	taskGroups    map[string]si.TaskGroup
 	tags          map[string]string
 	sm            *fsm.FSM
 	lock          *sync.RWMutex
 	schedulerAPI  api.SchedulerAPI
+	clients       *client.Clients
 }
 
 func (app *Application) String() string {
 	return fmt.Sprintf("applicationID: %s, queue: %s, partition: %s,"+
 		" totalNumOfTasks: %d, currentState: %s",
 		app.applicationID, app.queue, app.partition, len(app.taskMap), app.GetApplicationState())
+}
+
+func NewApplicationWithGang(appID, queueName, user string, tags map[string]string, taskGroups map[string]si.TaskGroup, clients *client.Clients) *Application {
+	app := NewApplication(appID, queueName, user, tags, clients.SchedulerAPI)
+	app.taskGroups = taskGroups
+	app.clients = clients
+	app.reservationMapping = make(map[string]*Task, 0)
+
+	for tgName, tg := range taskGroups {
+		log.Logger().Info("taskGroup",
+			zap.String("name", tgName),
+			zap.Int32("minMember", tg.MinMember),
+			zap.Any("minResource", tg.MinResource))
+
+		for i:=int32(0); i<tg.MinMember; i++ {
+			podReservationName := "tg-" + tgName + "-" + app.applicationID + fmt.Sprintf("%d", i)
+
+			// parsing resources
+			var cpuResource resource.Quantity
+			var memResource resource.Quantity
+			if cpuStr, ok := tg.MinResource[v1.ResourceCPU.String()]; ok {
+				cpuResource = resource.MustParse(cpuStr)
+			}
+			if memStr, ok := tg.MinResource[v1.ResourceMemory.String()]; ok {
+				memResource = resource.MustParse(memStr)
+			}
+
+			_, err := clients.KubeClient.Create(&v1.Pod{
+				ObjectMeta: v12.ObjectMeta{
+					Name:                       podReservationName,
+					Namespace:                  tags["namespace"],
+					Labels:  map[string]string{
+						"applicationId": app.applicationID,
+						"queue": app.queue,
+					},
+					Annotations: map[string]string{
+						"yunikorn.apache.org/task-group-name": tgName,
+						"yunikorn.apache.org/appID": app.applicationID,
+						"yunikorn.apache.org/pod-type": "reservation",
+					},
+				},
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Name:                     "fake-tg-pod",
+							Image:                    "k8s.gcr.io/pause",
+							//Command:                  []string{"sleep", "3600"},
+							Resources:                v1.ResourceRequirements{
+								Requests: map[v1.ResourceName]resource.Quantity {
+									v1.ResourceCPU : cpuResource,
+									v1.ResourceMemory: memResource,
+								},
+							},
+						},
+					},
+					RestartPolicy: "Never",
+					SchedulerName: "yunikorn",
+				},
+			})
+			if err != nil {
+				log.Logger().Error("failed to create reservation pod", zap.Error(err))
+				continue
+			}
+		}
+
+	}
+	return app
 }
 
 func NewApplication(appID, queueName, user string, tags map[string]string, scheduler api.SchedulerAPI) *Application {
@@ -81,8 +154,11 @@ func NewApplication(appID, queueName, user string, tags map[string]string, sched
 			{Name: string(events.AcceptApplication),
 				Src: []string{states.Submitted, states.Recovering},
 				Dst: states.Accepted},
+			{Name: string(events.TryReserve),
+				Src: []string{states.Accepted},
+				Dst: states.Reserving},
 			{Name: string(events.RunApplication),
-				Src: []string{states.Accepted, states.Running},
+				Src: []string{states.Accepted, states.Reserving, states.Running},
 				Dst: states.Running},
 			{Name: string(events.CompleteApplication),
 				Src: []string{states.Running},
@@ -136,6 +212,12 @@ func (app *Application) canHandle(ev events.ApplicationEvent) bool {
 	app.lock.RLock()
 	defer app.lock.RUnlock()
 	return app.sm.Can(string(ev.GetEvent()))
+}
+
+func (app *Application) hasTaskGroups() bool {
+	app.lock.RLock()
+	defer app.lock.RUnlock()
+	return len(app.taskGroups) > 0
 }
 
 func (app *Application) GetTask(taskID string) (interfaces.ManagedTask, error) {
@@ -270,10 +352,60 @@ func (app *Application) Schedule() {
 				zap.Error(err))
 		}
 	case states.Accepted:
-		ev := NewRunApplicationEvent(app.GetApplicationID())
-		if err := app.handle(ev); err != nil {
-			log.Logger().Warn("failed to handle RUN app event",
-				zap.Error(err))
+		if app.hasTaskGroups() {
+			ev := NewSimpleApplicationEvent(app.applicationID, events.TryReserve)
+			if err := app.handle(ev); err != nil {
+				log.Logger().Warn("failed to handle TryReserve app event",
+					zap.Error(err))
+			}
+		} else {
+			ev := NewRunApplicationEvent(app.GetApplicationID())
+			if err := app.handle(ev); err != nil {
+				log.Logger().Warn("failed to handle RUN app event",
+					zap.Error(err))
+			}
+		}
+	case states.Reserving:
+		log.Logger().Info("try reserving", zap.String("app", app.applicationID))
+		for _, task := range app.GetNewTasks() {
+			if task.taskType == reservation {
+				// for each new task, we do a sanity check before moving the state to Pending_Schedule
+				if err := task.sanityCheckBeforeScheduling(); err == nil {
+					// note, if we directly trigger submit task event, it may spawn too many duplicate
+					// events, because a task might be submitted multiple times before its state transits to PENDING.
+					if handleErr := task.handle(
+						NewSimpleTaskEvent(task.applicationID, task.taskID, events.InitTask)); handleErr != nil {
+						// something goes wrong when transit task to PENDING state,
+						// this should not happen because we already checked the state
+						// before calling the transition. Nowhere to go, just log the error.
+						log.Logger().Warn("init task failed", zap.Error(err))
+					}
+				} else {
+					events.GetRecorder().Event(task.GetTaskPod(), v1.EventTypeWarning, "FailedScheduling", err.Error())
+					log.Logger().Debug("task is not ready for scheduling",
+						zap.String("appID", task.applicationID),
+						zap.String("taskID", task.taskID),
+						zap.Error(err))
+				}
+			}
+		}
+
+		// TODO fix me
+		// simple check, all reservations are made, move to next stage
+		desire := int32(0)
+		for _, tg := range app.taskGroups {
+			desire += tg.MinMember
+		}
+		actual := len(app.getTasks(events.States().Task.Bound))
+		log.Logger().Info("reservation status",
+			zap.Int32("desire", desire),
+			zap.Int("actual", actual))
+		if desire == int32(actual) {
+			ev := NewRunApplicationEvent(app.GetApplicationID())
+			if err := app.handle(ev); err != nil {
+				log.Logger().Warn("failed to handle RUN app event",
+					zap.Error(err))
+			}
 		}
 	case states.Running:
 		if len(app.GetNewTasks()) > 0 {

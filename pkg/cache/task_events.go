@@ -127,6 +127,57 @@ func (ae AllocatedTaskEvent) GetApplicationID() string {
 }
 
 // ------------------------
+// Preempt Event
+// ------------------------
+type PreemptTaskEvent struct {
+	applicationID  string
+	taskID         string
+	event          events.TaskEventType
+	nodeID         string
+	allocationUUID string
+	toPreemptAllocationKey   string
+	toPreemptAllocationUUID  string
+}
+
+func NewPreemptTaskEvent(appID, taskID, allocUUID, nid, toPreemptKey, toPreemptID string) PreemptTaskEvent {
+	return PreemptTaskEvent{
+		applicationID:  appID,
+		taskID:         taskID,
+		event:          events.PreemptTask,
+		allocationUUID: allocUUID,
+		nodeID:         nid,
+		toPreemptAllocationKey: toPreemptKey,
+		toPreemptAllocationUUID: toPreemptID,
+	}
+}
+
+func (pt PreemptTaskEvent) GetEvent() events.TaskEventType {
+	return pt.event
+}
+
+func (pt PreemptTaskEvent) GetArgs() []interface{} {
+	args := make([]interface{}, 4)
+	args[0] = pt.allocationUUID
+	args[1] = pt.nodeID
+	args[2] = pt.toPreemptAllocationKey
+	args[3] = pt.toPreemptAllocationUUID
+	return args
+}
+
+func (pt PreemptTaskEvent) GetTaskID() string {
+	return pt.taskID
+}
+
+func (pt PreemptTaskEvent) GetApplicationID() string {
+	return pt.applicationID
+}
+
+
+func (pt PreemptTaskEvent) GetToPreemptAllocationUUID() string {
+	return pt.toPreemptAllocationUUID
+}
+
+// ------------------------
 // Bound Event
 // ------------------------
 type BindTaskEvent struct {

@@ -44,6 +44,8 @@ type ApplicationStates struct {
 	Recovering string
 	Submitted  string
 	Accepted   string
+	Reserving  string
+	Reserved   string
 	Running    string
 	Rejected   string
 	Completed  string
@@ -65,6 +67,7 @@ type TaskStates struct {
 	New        string
 	Pending    string
 	Scheduling string
+	Preempting string
 	Allocated  string
 	Rejected   string
 	Bound      string
@@ -84,6 +87,8 @@ func States() *AllStates {
 				Recovering: "Recovering",
 				Submitted:  "Submitted",
 				Accepted:   "Accepted",
+				Reserving:  "Reserving", // under this state, only reservations can be submitted
+				Reserved:   "Reserved",  // all reservations are made
 				Running:    "Running",
 				Rejected:   "Rejected",
 				Completed:  "Completed",

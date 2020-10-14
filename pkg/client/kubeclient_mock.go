@@ -67,6 +67,11 @@ func (c *KubeClientMock) Delete(pod *v1.Pod) error {
 	return c.deleteFn(pod)
 }
 
+func (c *KubeClientMock) Create(pod *v1.Pod) (*v1.Pod, error) {
+	return pod, nil
+}
+
+
 func (c *KubeClientMock) GetClientSet() kubernetes.Interface {
 	return c.clientSet
 }

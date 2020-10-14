@@ -19,8 +19,11 @@
 package general
 
 import (
+	"encoding/json"
+	"fmt"
 	"testing"
 
+	"github.com/apache/incubator-yunikorn-scheduler-interface/lib/go/si"
 	"gotest.tools/assert"
 	v1 "k8s.io/api/core/v1"
 	apis "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -469,3 +472,35 @@ func TestGetExistingAllocation(t *testing.T) {
 	assert.Equal(t, alloc.UUID, string(pod.UID))
 	assert.Equal(t, alloc.NodeID, "allocated-node")
 }
+
+func TestAnnotation(t *testing.T) {
+	ttt := map[string]si.TaskGroup{
+		"spark-driver": {
+			Name:      "gang-test",
+			MinMember: 1,
+			MinResource: map[string]string{
+				"CPU":    "500m",
+				"Memory": "500Mi",
+			},
+		},
+		"spark-executor": {
+			Name:      "gang-test",
+			MinMember: 3,
+			MinResource: map[string]string{
+				"CPU":    "500m",
+				"Memory": "500Mi",
+			},
+		},
+	}
+
+	out, _ := json.Marshal(ttt)
+	fmt.Println(string(out))
+
+	t2 := make(map[string]si.TaskGroup)
+	err := json.Unmarshal(out, &t2)
+	if err != nil {
+		fmt.Println(err)
+	}
+	fmt.Println(t2)
+}
+

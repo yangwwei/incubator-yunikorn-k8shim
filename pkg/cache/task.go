@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/utils"
+	"github.com/apache/incubator-yunikorn-k8shim/pkg/conf"
 	"go.uber.org/zap"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -47,8 +49,23 @@ type Task struct {
 	context        *Context
 	nodeName       string
 	createTime     time.Time
+	taskType       taskType
+	taskGroup      string
+	mapped         bool
 	sm             *fsm.FSM
 	lock           *sync.RWMutex
+}
+
+type taskType int
+const (
+	normal taskType = iota
+	reservation
+)
+
+func NewTaskWithGroup(tid string, taskGroupName string, app *Application, ctx *Context, pod *v1.Pod) *Task {
+	task := NewTask(tid, app, ctx, pod)
+	task.taskGroup = taskGroupName
+	return task
 }
 
 func NewTask(tid string, app *Application, ctx *Context, pod *v1.Pod) *Task {
@@ -76,6 +93,8 @@ func createTaskInternal(tid string, app *Application, resource *si.Resource,
 		application:   app,
 		pod:           pod,
 		resource:      resource,
+		taskType:      normal,
+		mapped:        false,
 		createTime:    pod.GetCreationTimestamp().Time,
 		context:       ctx,
 		lock:          &sync.RWMutex{},
@@ -94,8 +113,11 @@ func createTaskInternal(tid string, app *Application, resource *si.Resource,
 			{Name: string(events.TaskAllocated),
 				Src: []string{states.Scheduling},
 				Dst: states.Allocated},
+			{Name: string(events.PreemptTask),
+				Src: []string{states.Scheduling},
+				Dst: states.Preempting},
 			{Name: string(events.TaskBound),
-				Src: []string{states.Allocated},
+				Src: []string{states.Allocated, states.Preempting},
 				Dst: states.Bound},
 			{Name: string(events.CompleteTask),
 				Src: states.Any,
@@ -116,6 +138,7 @@ func createTaskInternal(tid string, app *Application, resource *si.Resource,
 		fsm.Callbacks{
 			string(events.SubmitTask):       task.handleSubmitTaskEvent,
 			string(events.TaskFail):         task.handleFailEvent,
+			string(events.PreemptTask):      task.handlePreemptionEvent,
 			states.Pending:                  task.postTaskPending,
 			states.Allocated:                task.postTaskAllocated,
 			states.Rejected:                 task.postTaskRejected,
@@ -124,6 +147,13 @@ func createTaskInternal(tid string, app *Application, resource *si.Resource,
 			events.EnterState:               task.enterState,
 		},
 	)
+
+	if podType, ok := task.pod.Annotations["yunikorn.apache.org/pod-type"]; ok {
+		if podType == "reservation" {
+			log.Logger().Info("task type is reservation", zap.String("taskName", task.alias))
+			task.taskType = reservation
+		}
+	}
 
 	return task
 }
@@ -205,11 +235,159 @@ func (task *Task) handleFailEvent(event *fsm.Event) {
 		zap.String("reason", eventArgs[0]))
 }
 
+func (task *Task) handlePreemptionEvent(event *fsm.Event) {
+	eventArgs := make([]string, 4)
+	if err := events.GetEventArgsAsStrings(eventArgs, event.Args); err != nil {
+		dispatcher.Dispatch(NewFailTaskEvent(task.applicationID, task.taskID, err.Error()))
+		events.GetRecorder().Eventf(task.pod, v1.EventTypeWarning, "SchedulingFailed",
+			"%s scheduling failed, reason: %s", task.alias, err.Error())
+		return
+	}
+
+	allocationUUID := eventArgs[0]
+	nodeID := eventArgs[1]
+	toPreemptKey := eventArgs[2]
+	toPreemptUUID := eventArgs[3]
+
+	// set allocation UUID
+	task.allocationUUID = toPreemptUUID
+
+	log.Logger().Info("preemption start",
+		zap.String("task", task.alias),
+		zap.String("node", nodeID),
+		zap.String("targetKey", toPreemptKey),
+		zap.String("targetID", toPreemptUUID))
+
+	toPreemptTask, err := task.application.GetTask(toPreemptKey)
+	if err != nil {
+		log.Logger().Error("fail to find the preempt target task", zap.Error(err))
+		dispatcher.Dispatch(NewFailTaskEvent(task.applicationID, task.taskID, err.Error()))
+		events.GetRecorder().Eventf(task.pod, v1.EventTypeWarning, "SchedulingFailed",
+			"%s scheduling failed, reason: %s", task.alias, err.Error())
+		return
+	}
+
+	// post a message to indicate the pod gets its allocation
+	events.GetRecorder().Eventf(task.pod,
+		v1.EventTypeNormal, "Preempting",
+		"Start to preempt %s on node %s", toPreemptTask.GetTaskPod().Name, nodeID)
+
+	// task allocation UID is assigned once we get allocation decision from scheduler core
+	task.allocationUUID = allocationUUID
+
+	err = task.context.apiProvider.GetAPIs().KubeClient.Delete(toPreemptTask.GetTaskPod())
+	if err != nil {
+		log.Logger().Error("failed to delete pod", zap.Error(err))
+		panic("// handle me")
+	}
+
+	// TODO remove me... just sleep a bit of time to make sure deletion is done...
+	time.Sleep(3*time.Second)
+
+	err = task.context.AssumePod(task.taskID, nodeID)
+	if err != nil {
+		log.Logger().Error("failed to assume pod", zap.Error(err))
+		panic("// handle me")
+	}
+
+	// before binding pod to node, first bind volumes to pod
+	log.Logger().Debug("bind pod volumes",
+		zap.String("podName", task.pod.Name),
+		zap.String("podUID", string(task.pod.UID)))
+	var errorMessage string
+	if task.context.apiProvider.GetAPIs().VolumeBinder != nil {
+		if err := task.context.bindPodVolumes(task.pod); err != nil {
+			errorMessage = fmt.Sprintf("bind pod volumes failed, name: %s, %s", task.alias, err.Error())
+			dispatcher.Dispatch(NewFailTaskEvent(task.applicationID, task.taskID, errorMessage))
+			events.GetRecorder().Eventf(task.pod,
+				v1.EventTypeWarning, "PodVolumesBindFailure", errorMessage)
+			return
+		}
+	}
+
+	log.Logger().Debug("bind pod",
+		zap.String("podName", task.pod.Name),
+		zap.String("podUID", string(task.pod.UID)))
+
+	if err := utils.WaitForCondition(func() bool {
+		bindingErr := task.context.apiProvider.GetAPIs().KubeClient.Bind(task.pod, nodeID)
+		return bindingErr == nil
+	}, 3*time.Second, 60*time.Second); err != nil {
+		errorMessage = fmt.Sprintf("bind pod volumes failed, name: %s, %s", task.alias, err.Error())
+		log.Logger().Error(errorMessage)
+		dispatcher.Dispatch(NewFailTaskEvent(task.applicationID, task.taskID, errorMessage))
+		events.GetRecorder().Eventf(task.pod,
+			v1.EventTypeWarning, "PodBindFailure", errorMessage)
+		return
+	}
+
+	log.Logger().Info("successfully bound pod", zap.String("podName", task.pod.Name))
+	dispatcher.Dispatch(NewBindTaskEvent(task.applicationID, task.taskID))
+	events.GetRecorder().Eventf(task.pod,
+		v1.EventTypeNormal, "PodBindSuccessful",
+		"Pod %s is successfully bound to node %s", task.alias, nodeID)
+
+}
+
+func (task *Task) getReservation() *Task {
+	// if no mapping found yet
+	if task.taskType == reservation {
+		return nil
+	}
+
+	// not a gang member
+	if task.taskGroup == "" {
+		return nil
+	}
+
+	// reservation must be allocated already
+	for _, allocatedTask := range task.application.getTasks(events.States().Task.Bound) {
+		if allocatedTask.mapped == false && allocatedTask.taskGroup == task.taskGroup {
+			allocatedTask.mapped = true
+			return allocatedTask
+		}
+	}
+
+	return nil
+}
+
 func (task *Task) handleSubmitTaskEvent(event *fsm.Event) {
 	log.Logger().Debug("scheduling pod",
 		zap.String("podName", task.pod.Name))
 	// convert the request
-	rr := common.CreateUpdateRequestForTask(task.applicationID, task.taskID, task.resource, task.pod)
+	// rr := common.CreateUpdateRequestForTask(task.applicationID, task.taskID, task.resource, task.pod, task.getReservation())
+
+	reservedSpot := task.getReservation()
+	victims := make([]*si.PreemptionVictim, 0)
+	var victim *si.PreemptionVictim
+	if reservedSpot != nil {
+		victim = &si.PreemptionVictim {
+			AllocationKey: reservedSpot.taskID,
+			AllocationUUID: reservedSpot.allocationUUID,
+			HostName: "", // TODO add host name
+		}
+		victims = append(victims, victim)
+		log.Logger().Info("victim info",
+			zap.Any("victim", victim))
+	}
+
+	ask := si.AllocationAsk{
+		AllocationKey:  task.taskID,
+		ResourceAsk:    task.resource,
+		ApplicationID:  task.applicationID,
+		MaxAllocations: 1,
+		Tags:           common.CreateTagsForTask(task.pod),
+		Victims:        victims,
+	}
+
+	rr := si.UpdateRequest{
+		Asks:                []*si.AllocationAsk{&ask},
+		NewSchedulableNodes: nil,
+		UpdatedNodes:        nil,
+		UtilizationReports:  nil,
+		RmID:                conf.GetSchedulerConf().ClusterID,
+	}
+
 	log.Logger().Debug("send update request", zap.String("request", rr.String()))
 	if err := task.context.apiProvider.GetAPIs().SchedulerAPI.Update(&rr); err != nil {
 		log.Logger().Debug("failed to send scheduling request to scheduler", zap.Error(err))
@@ -330,9 +508,15 @@ func (task *Task) beforeTaskCompleted(event *fsm.Event) {
 }
 
 func (task *Task) releaseAllocation() {
+	// TODO fixme how to avoid resource leak? I.e if real pod is not running, release should happen!
+	if task.taskType == reservation {
+		log.Logger().Info("skip releasing allocation, this is a reservation.")
+		return
+	}
+
 	// scheduler api might be nil in some tests
 	if task.context.apiProvider.GetAPIs().SchedulerAPI != nil {
-		log.Logger().Debug("prepare to send release request",
+		log.Logger().Info("prepare to send release request",
 			zap.String("applicationID", task.applicationID),
 			zap.String("taskID", task.taskID),
 			zap.String("taskAlias", task.alias),

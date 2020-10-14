@@ -87,7 +87,7 @@ run: build
 	@cp ${LOCAL_CONF}/${CONF_FILE} ${RELEASE_BIN_DIR}
 	cd ${RELEASE_BIN_DIR} && ./${BINARY} -kubeConfig=$(KUBECONFIG) -interval=1s \
 	-clusterId=mycluster -clusterVersion=${VERSION} -policyGroup=queues \
-	-logEncoding=console -logLevel=-1
+	-logEncoding=console -logLevel=0
 
 # Create output directories
 .PHONY: init
@@ -125,7 +125,7 @@ sched_image: scheduler
 	@coreSHA=$$(go list -m "github.com/apache/incubator-yunikorn-core" | cut -d "-" -f5) ; \
 	siSHA=$$(go list -m "github.com/apache/incubator-yunikorn-scheduler-interface" | cut -d "-" -f6) ; \
 	shimSHA=$$(git rev-parse --short=12 HEAD) ; \
-	docker build ./deployments/image/configmap -t ${REGISTRY}/yunikorn:scheduler-${VERSION} \
+	docker build ./deployments/image/configmap -t yunikorn/yunikorn-gang:${VERSION} \
 	--label "yunikorn-core-revision=$${coreSHA}" \
 	--label "yunikorn-scheduler-interface-revision=$${siSHA}" \
 	--label "yunikorn-k8shim-revision=$${shimSHA}" \

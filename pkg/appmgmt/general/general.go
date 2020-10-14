@@ -19,11 +19,7 @@
 package general
 
 import (
-	"go.uber.org/zap"
-	"k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/selection"
-	k8sCache "k8s.io/client-go/tools/cache"
+	"encoding/json"
 
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/appmgmt/interfaces"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/client"
@@ -32,6 +28,11 @@ import (
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/common/utils"
 	"github.com/apache/incubator-yunikorn-k8shim/pkg/log"
 	"github.com/apache/incubator-yunikorn-scheduler-interface/lib/go/si"
+	"go.uber.org/zap"
+	"k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
+	k8sCache "k8s.io/client-go/tools/cache"
 )
 
 // implements interfaces#Recoverable, interfaces#AppManager
@@ -88,10 +89,16 @@ func (os *Manager) getTaskMetadata(pod *v1.Pod) (interfaces.TaskMetadata, bool) 
 		return interfaces.TaskMetadata{}, false
 	}
 
+	tg, ok := pod.Annotations["yunikorn.apache.org/task-group-name"]
+	if !ok {
+		tg = ""
+	}
+
 	return interfaces.TaskMetadata{
 		ApplicationID: appId,
 		TaskID:        string(pod.UID),
 		Pod:           pod,
+		TaskGroup:     tg,
 	}, true
 }
 
@@ -114,11 +121,22 @@ func (os *Manager) getAppMetadata(pod *v1.Pod) (interfaces.ApplicationMetadata, 
 	// get the application owner (this is all that is available as far as we can find)
 	user := pod.Spec.ServiceAccountName
 
+	// ---------------
+	// TODO replace me
+	// ---------------
+	var parsedValue map[string]si.TaskGroup
+	if value, ok := pod.Annotations["yunikorn.apache.org/task-groups"]; ok {
+		if err := json.Unmarshal([]byte(value), &parsedValue); err != nil {
+			panic(err)
+		}
+	}
+
 	return interfaces.ApplicationMetadata{
 		ApplicationID: appId,
 		QueueName:     utils.GetQueueNameFromPod(pod),
 		User:          user,
 		Tags:          tags,
+		TaskGroups:    parsedValue,
 	}, true
 }
 

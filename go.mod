@@ -39,6 +39,8 @@ require (
 )
 
 replace (
+	github.com/apache/incubator-yunikorn-core => /Users/wyang/workspace/github/wyang/incubator-yunikorn-core
+	github.com/apache/incubator-yunikorn-scheduler-interface => /Users/wyang/workspace/github/wyang/incubator-yunikorn-scheduler-interface
 	k8s.io/api => k8s.io/api v0.16.13
 	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.16.13
 	k8s.io/apimachinery => k8s.io/apimachinery v0.16.13

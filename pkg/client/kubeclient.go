@@ -114,3 +114,8 @@ func (nc SchedulerKubeClient) Delete(pod *v1.Pod) error {
 	}
 	return nil
 }
+
+func (nc SchedulerKubeClient) Create(pod *v1.Pod) (*v1.Pod, error) {
+	return nc.clientSet.CoreV1().Pods(pod.Namespace).Create(pod)
+}
+
